@@ -1,8 +1,10 @@
 'use strict';
 
 const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { regenAllColors }    = require('./roleManager');
-const { refreshAllPlayers } = require('./scheduler');
+const { regenAllColors }       = require('./roleManager');
+const { refreshAllPlayers }    = require('./scheduler');
+const { runRegistrationFlow }  = require('./memberJoin');
+const db                       = require('./database');
 
 // Discord interaction tokens expire after 15 minutes.
 // For safety we stop using editReply after 13 minutes and fall back to a channel message.
@@ -18,6 +20,46 @@ function isAdmin(interaction) {
   if (interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) return true;
   return false;
 }
+
+// ── /register ────────────────────────────────────────────────────────────────
+
+const registerCommand = {
+  data: new SlashCommandBuilder()
+    .setName('register')
+    .setDescription('Koppel je WOS speler-ID aan je Discord-account'),
+
+  async execute(interaction) {
+    // Check if already registered
+    const existing = db.getPlayerByDiscord(interaction.user.id);
+    if (existing) {
+      const embed = new EmbedBuilder()
+        .setColor(0xf39c12)
+        .setTitle('ℹ️ Al geregistreerd')
+        .setDescription(
+          `Je bent al geregistreerd als **${existing.nickname}** (ID: \`${existing.player_id}\`).\n\n` +
+          `🗺️ Staat: **${existing.state}**\n\n` +
+          `Wil je een ander speler-ID koppelen? Neem contact op met een beheerder.`
+        );
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+
+    // Defer reply — the actual flow happens in DM
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      // runRegistrationFlow sends a DM and updates the deferred reply
+      await runRegistrationFlow(interaction.member, {
+        isNewMember: false,
+        interaction,
+      });
+    } catch (err) {
+      console.error('[register] Unexpected error:', err);
+      await interaction.editReply({
+        content: '❌ Er is een onverwachte fout opgetreden. Probeer het later opnieuw.',
+      }).catch(() => {});
+    }
+  },
+};
 
 // ── /regen-colors ────────────────────────────────────────────────────────────
 
@@ -116,12 +158,7 @@ const refreshDataCommand = {
 };
 
 /**
- * Attempt to editReply on the interaction if still within the safe window,
- * otherwise fall back to sending a message in the channel where the command was used.
- *
- * @param {import('discord.js').ChatInputCommandInteraction} interaction
- * @param {number} startedAt - timestamp when deferReply was called
- * @param {object} payload - message payload for editReply / send
+ * Attempt to editReply if still within the safe window, otherwise fall back to channel message.
  */
 async function safeEditReply(interaction, startedAt, payload) {
   const elapsed = Date.now() - startedAt;
@@ -131,7 +168,6 @@ async function safeEditReply(interaction, startedAt, payload) {
       return sendFallbackMessage(interaction, payload);
     });
   } else {
-    // Interaction token likely expired — send to channel instead
     await sendFallbackMessage(interaction, payload);
   }
 }
@@ -147,4 +183,4 @@ async function sendFallbackMessage(interaction, payload) {
   }
 }
 
-module.exports = { regenColorsCommand, refreshDataCommand };
+module.exports = { registerCommand, regenColorsCommand, refreshDataCommand };

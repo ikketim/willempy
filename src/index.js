@@ -11,7 +11,7 @@ const {
 } = require('discord.js');
 
 const { handleMemberJoin }              = require('./memberJoin');
-const { regenColorsCommand, refreshDataCommand } = require('./adminCommands');
+const { registerCommand, regenColorsCommand, refreshDataCommand } = require('./adminCommands');
 const { scheduleDailyRefresh }          = require('./scheduler');
 
 // ── Validate env ──────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ const client = new Client({
   ],
 });
 
-const commands = [regenColorsCommand, refreshDataCommand];
+const commands = [registerCommand, regenColorsCommand, refreshDataCommand];
 
 // ── Register slash commands on ready ─────────────────────────────────────────
 

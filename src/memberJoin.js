@@ -10,10 +10,7 @@ const MAX_ATTEMPTS = 3;              // max wrong-input retries before giving up
 
 /**
  * Handle a new guild member joining.
- * 1. DM them asking for their WOS player ID.
- * 2. Collect their reply, giving feedback on bad input (up to MAX_ATTEMPTS).
- * 3. Look them up via the API.
- * 4. Assign the correct state role.
+ * Delegates to runRegistrationFlow which is also used by /register.
  *
  * @param {import('discord.js').GuildMember} member
  */
@@ -27,19 +24,47 @@ async function handleMemberJoin(member) {
     return;
   }
 
+  await runRegistrationFlow(member, { isNewMember: true });
+}
+
+/**
+ * Full DM-based registration flow, shared between GuildMemberAdd and /register.
+ *
+ * @param {import('discord.js').GuildMember} member
+ * @param {object} opts
+ * @param {boolean} [opts.isNewMember=false]  - true when triggered by join event (affects welcome text)
+ * @param {import('discord.js').ChatInputCommandInteraction} [opts.interaction] - set when triggered by /register
+ */
+async function runRegistrationFlow(member, { isNewMember = false, interaction = null } = {}) {
   // Open a DM
   let dm;
   try {
     dm = await member.user.createDM();
   } catch {
-    console.warn(`[join] Cannot DM ${member.user.tag} — DMs may be closed.`);
+    console.warn(`[register] Cannot DM ${member.user.tag} — DMs may be closed.`);
+    if (interaction) {
+      await interaction.editReply({
+        content: '❌ Ik kan je geen DM sturen. Zet je DMs aan en probeer opnieuw.',
+      }).catch(() => {});
+    }
     return;
   }
 
+  // If triggered by /register, tell them to check their DMs
+  if (interaction) {
+    await interaction.editReply({
+      content: '📨 Ik heb je een DM gestuurd! Volg de instructies daar om je te registreren.',
+    }).catch(() => {});
+  }
+
   // Ask for player ID
+  const title = isNewMember
+    ? '🏔️ Welkom bij de Dutch Whiteout Survival server!'
+    : '🏔️ WOS Registratie';
+
   const askEmbed = new EmbedBuilder()
     .setColor(0x3498db)
-    .setTitle('🏔️ Welkom bij de Dutch Whiteout Survival server!')
+    .setTitle(title)
     .setDescription(
       'Om je de juiste rol te geven, hebben we je **WOS speler-ID** nodig.\n\n' +
       'Je kunt je speler-ID vinden in het spel onder **Profiel → Kopieer ID**.\n\n' +
@@ -50,12 +75,11 @@ async function handleMemberJoin(member) {
   try {
     await dm.send({ embeds: [askEmbed] });
   } catch {
-    console.warn(`[join] Failed to send DM to ${member.user.tag}`);
+    console.warn(`[register] Failed to send DM to ${member.user.tag}`);
     return;
   }
 
   // Collect player ID with real-time feedback on bad input
-  // Uses a manual collector so we can reply to every message, not just matching ones.
   const playerId = await collectPlayerId(dm, member);
 
   if (!playerId) {
@@ -74,7 +98,7 @@ async function handleMemberJoin(member) {
       await dm.send('❌ De API-limiet is bereikt. Probeer het later opnieuw of vraag een beheerder om hulp.').catch(() => {});
       return;
     }
-    console.error(`[join] fetchPlayer failed for ${member.user.tag}:`, err);
+    console.error(`[register] fetchPlayer failed for ${member.user.tag}:`, err);
     await dm.send('❌ Er is een onverwachte fout opgetreden. Probeer het later opnieuw of neem contact op met een beheerder.').catch(() => {});
     return;
   }
@@ -89,7 +113,7 @@ async function handleMemberJoin(member) {
   // Validate the state (kid) from the API response
   const state = playerData.kid;
   if (typeof state !== 'number' || !Number.isInteger(state) || state < 0) {
-    console.error(`[join] Invalid kid value from API for player ${playerId}:`, state);
+    console.error(`[register] Invalid kid value from API for player ${playerId}:`, state);
     await dm.send('❌ Je spelersgegevens zijn ongeldig (onbekende staat). Neem contact op met een beheerder.').catch(() => {});
     return;
   }
@@ -118,7 +142,7 @@ async function handleMemberJoin(member) {
   try {
     await assignStateRole(member, state);
   } catch (err) {
-    console.error(`[join] Role assignment failed for ${member.user.tag}:`, err.message);
+    console.error(`[register] Role assignment failed for ${member.user.tag}:`, err.message);
     await dm.send('⚠️ Je ID is opgeslagen, maar het toewijzen van je rol is mislukt. Neem contact op met een beheerder.').catch(() => {});
     return;
   }
@@ -158,13 +182,11 @@ async function collectPlayerId(dm, member) {
       const input = msg.content.trim();
 
       if (/^\d{1,12}$/.test(input)) {
-        // Valid — stop collecting and resolve
         collector.stop('valid');
         resolve(input);
         return;
       }
 
-      // Invalid input — give feedback
       attempts++;
       const remaining = Math.max(0, Math.round((deadline - Date.now()) / 1000));
 
@@ -182,12 +204,11 @@ async function collectPlayerId(dm, member) {
     });
 
     collector.on('end', (_, reason) => {
-      if (reason === 'valid' || reason === 'toomany') return; // already resolved
-      // Timed out
+      if (reason === 'valid' || reason === 'toomany') return;
       dm.send('⏰ Tijdslimiet verlopen. Neem contact op met een beheerder als je hulp nodig hebt.').catch(() => {});
       resolve(null);
     });
   });
 }
 
-module.exports = { handleMemberJoin };
+module.exports = { handleMemberJoin, runRegistrationFlow };
