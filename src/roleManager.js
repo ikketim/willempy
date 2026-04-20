@@ -3,6 +3,9 @@
 const crypto = require('crypto');
 const db     = require('./database');
 
+/** Regex matching a pure state role name: 1–4 digits, nothing else */
+const STATE_ROLE_RE = /^\d{1,4}$/;
+
 /**
  * Derive a deterministic hex color from a state number.
  * Uses the first 6 hex digits of MD5(state string).
@@ -11,6 +14,35 @@ function stateColor(state) {
   return parseInt(
     crypto.createHash('md5').update(String(state)).digest('hex').slice(0, 6),
     16
+  );
+}
+
+/**
+ * Update a member's server nickname to prefix it with [state].
+ * Rules:
+ *  - If nickname already starts with [anything], replace that bracket prefix.
+ *  - Otherwise prepend [state] to the current display name.
+ * Discord server nicknames are capped at 32 characters; we truncate if needed.
+ * Silently skips if the bot lacks permission (e.g. server owner).
+ *
+ * @param {import('discord.js').GuildMember} member
+ * @param {number} state
+ */
+async function updateNickname(member, state) {
+  const prefix      = `[${state}]`;
+  const displayName = member.nickname ?? member.user.username;
+
+  // Strip any existing [*] prefix (greedy up to the closing bracket)
+  const stripped = displayName.replace(/^\[.*?\]/, '').trimStart();
+
+  // Build new nickname, truncate to Discord's 32-char limit
+  const newNick = `${prefix}${stripped}`.slice(0, 32);
+
+  // No change needed
+  if (member.nickname === newNick) return;
+
+  await member.setNickname(newNick, 'WOS Dutch Bot — state prefix').catch(err =>
+    console.warn(`[nick] Could not set nickname for ${member.user.tag}: ${err.message}`)
   );
 }
 
@@ -82,7 +114,9 @@ async function getOrCreateStateRole(guild, state) {
 }
 
 /**
- * Remove all tracked state roles from a member, then assign the correct one.
+ * Remove all state roles from a member (both DB-tracked AND any role whose
+ * name is purely 1–4 digits), then assign the correct state role, and
+ * update the member's nickname with a [state] prefix.
  *
  * @param {import('discord.js').GuildMember} member
  * @param {number} state
@@ -91,11 +125,16 @@ async function getOrCreateStateRole(guild, state) {
 async function assignStateRole(member, state) {
   const guild = member.guild;
 
-  // Collect all tracked state role IDs from DB
+  // Build the set of role IDs to remove:
+  //   - All DB-tracked state role IDs
+  //   - Any role the member currently has whose name matches /^\d{1,4}$/
+  //     (catches pre-existing number roles not yet in the DB)
   const allTracked = new Set(db.getAllStateRoles().map(r => r.role_id));
 
-  // Remove any existing state roles from the member
-  const toRemove = member.roles.cache.filter(r => allTracked.has(r.id));
+  const toRemove = member.roles.cache.filter(r =>
+    allTracked.has(r.id) || STATE_ROLE_RE.test(r.name)
+  );
+
   for (const [, role] of toRemove) {
     await member.roles.remove(role).catch(err =>
       console.warn(`[roles] Could not remove role ${role.name} from ${member.user.tag}: ${err.message}`)
@@ -106,6 +145,9 @@ async function assignStateRole(member, state) {
   const role = await getOrCreateStateRole(guild, state);
   await member.roles.add(role);
   console.log(`[roles] Assigned state ${state} to ${member.user.tag}`);
+
+  // Update nickname: [state]CurrentName
+  await updateNickname(member, state);
 }
 
 /**
@@ -141,4 +183,4 @@ async function regenAllColors(guild) {
   return { updated, skipped };
 }
 
-module.exports = { getOrCreateStateRole, assignStateRole, regenAllColors, stateColor };
+module.exports = { getOrCreateStateRole, assignStateRole, regenAllColors, stateColor, updateNickname };
