@@ -29,7 +29,7 @@ A simple Discord bot for the **Dutch Whiteout Survival** community.
 
 ```bash
 # 1. Clone / download the project
-cd dutch-wos-bot
+cd willempy
 
 # 2. Install dependencies
 npm install
@@ -90,7 +90,7 @@ Geen externe database nodig.
 ## Structuur
 
 ```
-dutch-wos-bot/
+willempy/
 ├── src/
 │   ├── index.js          # Bot entry point + event wiring
 │   ├── database.js       # SQLite database (better-sqlite3)
